@@ -15,6 +15,7 @@
 #include <torch/types.h>
 
 #include <pybind11/chrono.h>
+#include <pybind11/functional.h>
 #include <pybind11/operators.h>
 
 namespace torch {
@@ -22,6 +23,18 @@ namespace distributed {
 namespace rpc {
 
 namespace {
+
+// Wrap Python function to guard deref
+struct PythonFunction {
+  PythonFunction(py::function func) : func_(std::move(func)) {}
+
+  ~PythonFunction() {
+    pybind11::gil_scoped_acquire ag;
+    func_ = py::none();
+  }
+
+  py::function func_;
+};
 
 constexpr std::chrono::milliseconds kDeleteAllUsersTimeout(100000);
 
@@ -226,7 +239,7 @@ PyObject* rpc_init(PyObject* /* unused */) {
               R"(
                   Create a helper proxy to easily launch an ``rpc_sync`` using
                   the owner of the RRef as the destination to run functions on
-                  the object referenced by this RRef. More specifically, 
+                  the object referenced by this RRef. More specifically,
                   ``rref.rpc_sync().func_name(*args, **kwargs)`` is the same as
                   the following:
 
@@ -250,7 +263,7 @@ PyObject* rpc_init(PyObject* /* unused */) {
               R"(
                   Create a helper proxy to easily launch an ``rpc_async`` using
                   the owner of the RRef as the destination to run functions on
-                  the object referenced by this RRef. More specifically, 
+                  the object referenced by this RRef. More specifically,
                   ``rref.rpc_async().func_name(*args, **kwargs)`` is the same as
                   the following:
 
@@ -274,7 +287,7 @@ PyObject* rpc_init(PyObject* /* unused */) {
               R"(
                   Create a helper proxy to easily launch an ``remote`` using
                   the owner of the RRef as the destination to run functions on
-                  the object referenced by this RRef. More specifically, 
+                  the object referenced by this RRef. More specifically,
                   ``rref.remote().func_name(*args, **kwargs)`` is the same as
                   the following:
 
@@ -333,15 +346,50 @@ PyObject* rpc_init(PyObject* /* unused */) {
   // TODO Once python object can be tagged as IValue and c10::ivalue::Future is
   // implemented as generic Future<IValue>, we can consider all rpc call
   // to return a future<IValue> later on.
-  auto future = shared_ptr_class_<FutureMessage>(module, "Future")
-                    .def(
-                        "wait",
-                        [&](FutureMessage& fut) { return toPyObj(fut.wait()); },
-                        py::call_guard<py::gil_scoped_release>(),
-                        R"(
-Wait on future to complete and return the object it completed with.
-If the future completes with an error, an exception is thrown.
-              )");
+  shared_ptr_class_<FutureMessage>(module, "Future")
+      .def(
+          "wait",
+          [&](FutureMessage& fut) { return toPyObj(fut.wait()); },
+          py::call_guard<py::gil_scoped_release>(),
+          R"(
+              Wait on future to complete and return the object it completed
+              with. If the future completes with an error, an exception is
+              thrown.
+          )")
+      .def(
+          "add_done_callback",
+          [&](FutureMessage& fut, py::function cb) {
+            // We this an additional layer of wrapper here to guard the
+            // destruction of the py::function object. Because, the
+            // FutureMessage owns a reference to the py::function in its
+            // callback vector, but FutureMessage does acquire GIL.
+            PythonFunction pf(std::move(cb));
+            fut.addCallback([pf](const FutureMessage& fut) {
+                pybind11::gil_scoped_acquire ag;
+                pf.func_(fut);
+            });
+          },
+          R"(
+              Registers a callback to the ``Future``, which will be fired
+              when the value in ``Future`` is ready. Multiple callbacks can
+              be added to the same ``Future``, and will be invoked in the
+              same order as they were added. The callback takes one argument,
+              which is the reference to this ``Future``. The callback function
+              can use the ``Future.wait()`` API to get the value.
+
+              Arguments:
+                  callback (callable): a Python callable, which takes this
+                  ``Future`` object as the only argument.
+
+              Example::
+                  >>> def callback(fut):
+                  >>>     print(f"RPC return value is {fut.wait()}.")
+                  >>>
+                  >>> fut = dist.rpc_async("worker1", torch.add, args=(torch.ones(2), 3))
+                  >>> # The inserted callback will print the return value when
+                  >>> # receiving the response from "worker1"
+                  >>> fut.add_done_callback(callback)
+          )");
 
   shared_ptr_class_<ProcessGroupRpcBackendOptions>(
       module,
