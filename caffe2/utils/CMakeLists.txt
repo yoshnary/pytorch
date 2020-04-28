@@ -1,15 +1,8 @@
-# TODO: Add ThreadPoolXNNPACK.cc when XNNPACK integration is updated
-# to pass the actual threadpool ptr instead of nullptr.
 if(INTERN_BUILD_MOBILE AND NOT BUILD_CAFFE2_MOBILE)
-  add_definitions(-DUSE_INTERNAL_THREADPOOL_IMPL)
   list(APPEND Caffe2_CPU_SRCS
     utils/string_utils.cc
-    utils/threadpool/pthreadpool.cc
-    utils/threadpool/pthreadpool_impl.cc
-    utils/threadpool/pthreadpool_new_if_impl.c
     utils/threadpool/ThreadPool.cc
-    utils/threadpool/ThreadPoolMobile.cc
-    utils/threadpool/ThreadPoolXNNPACK.cc
+    utils/threadpool/PThreadPool.cc
   )
   set(Caffe2_CPU_SRCS ${Caffe2_CPU_SRCS} PARENT_SCOPE)
   return()
@@ -36,14 +29,13 @@ list(APPEND Caffe2_CPU_SRCS
 # ---[ threadpool/pthreadpool* is a local modification of the NNPACK
 # pthreadpool with a very similar interface. Neither NNPACK, nor this
 # thread pool supports Windows.
-if(NOT MSVC AND USE_XNNPACK)
+if(NOT MSVC)
   add_definitions(-DUSE_INTERNAL_THREADPOOL_IMPL)
   set(Caffe2_CPU_SRCS ${Caffe2_CPU_SRCS}
-          utils/threadpool/pthreadpool.cc
-          utils/threadpool/pthreadpool_impl.cc
-          utils/threadpool/pthreadpool_new_if_impl.c
-          utils/threadpool/ThreadPoolMobile.cc
-          utils/threadpool/ThreadPoolXNNPACK.cc
+          utils/threadpool/c2_pthreadpool.cc
+          utils/threadpool/c2_pthreadpool_impl.cc
+          utils/threadpool/ThreadPool.cc
+          utils/threadpool/PThreadPool.cc
           )
 endif()
 
