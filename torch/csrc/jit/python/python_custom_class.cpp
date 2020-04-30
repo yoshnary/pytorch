@@ -10,8 +10,16 @@ struct CustomObjectProxy;
 py::object ScriptClass::__call__(py::args args, py::kwargs kwargs) {
   auto instance =
       Object(at::ivalue::Object::create(class_type_, /*numSlots=*/1));
-  return invokeScriptMethodFromPython(
-      instance, "__init__", std::move(args), std::move(kwargs));
+  Function* init_fn = instance.type()->findMethod("__init__");
+  TORCH_CHECK(
+      init_fn,
+      "Custom C++ class: '",
+      instance.type()->python_str(),
+      "' does not have an '__init__' method bound. "
+      "Did you forget to add '.def(torch::init<...>)' to its registration?")
+  Method init_method(instance._ivalue(), init_fn);
+  invokeScriptMethodFromPython(init_method, std::move(args), std::move(kwargs));
+  return py::cast(instance);
 }
 
 void initPythonCustomClassBindings(PyObject* module) {
